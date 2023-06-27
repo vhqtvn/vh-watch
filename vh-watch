@@ -1,0 +1,153 @@
+#!/bin/bash
+
+HELP_FLAG=0
+FILES=()
+DIRS=()
+SCRIPTS=()
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+    -f)
+        FILES+=("$2")
+        shift 2
+        ;;
+    -d)
+        DIRS+=("$2")
+        shift 2
+        ;;
+    -r)
+        SCRIPTS+=("$2")
+        shift 2
+        ;;
+    -h)
+        HELP_FLAG=1
+        break
+        ;;
+    *)
+        echo "Unknown argument: $1"
+        exit 1
+        ;;
+    esac
+done
+
+if ! command -v inotifywait &>/dev/null; then
+    echo "inotifywait not found"
+    echo "install inotify-tools on ubuntu/debian"
+    exit 1
+fi
+
+show_help() {
+    echo "Usage: $0 [-f file:EVENT] [-d dir:EVENT] [-r script] [-h]"
+    echo "EVENT for file can be modified, deleted"
+    echo "EVENT for dir can be created, deleted, updated"
+    exit 0
+}
+
+validate_event() {
+    if [[ $1 == "" ]]; then
+        return 0
+    fi
+    if [[ "$1" =~ $2 ]]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+for F in "${FILES[@]}"; do
+    FILE=$(echo "$F" | cut -d: -f1)
+    EVENT=$(echo "$F" | cut -d: -f2)
+    if ! validate_event "$EVENT" "modified|deleted"; then
+        echo "Invalid event for file: $EVENT"
+        HELP_FLAG=2
+    fi
+    if [ ! -f "$FILE" ]; then
+        echo "File not found: $FILE"
+        HELP_FLAG=2
+    fi
+done
+
+for D in "${DIRS[@]}"; do
+    DIR=$(echo "$D" | cut -d: -f1)
+    EVENT=$(echo "$D:" | cut -d: -f2)
+    if ! validate_event "$EVENT" "created|deleted|updated"; then
+        echo "Invalid event for dir: $EVENT"
+        HELP_FLAG=2
+    fi
+    if [ ! -d "$DIR" ]; then
+        echo "Dir not found: $DIR"
+        HELP_FLAG=2
+    fi
+done
+
+if [ $HELP_FLAG -eq 1 ]; then
+    show_help
+elif [ $HELP_FLAG -eq 2 ]; then
+    show_help
+    exit 1
+fi
+
+# use inotifywait to watch file/dir
+
+IONOTIFYWAIT_ARGS=()
+for F in "${FILES[@]}"; do
+    #possible event in ionotifywait for file: access, attrib, close_write, close_nowrite, close, create, delete, delete_self, modify, move_self, moved_from, moved_to, move, open, all
+    FILE=$(echo "$F" | cut -d: -f1)
+    REQUESTED_EVENT=$(echo "$F:" | cut -d: -f2)
+    case "$REQUESTED_EVENT" in
+    modified)
+        IONOTIFY_EVENT="modify"
+        ;;
+    deleted)
+        IONOTIFY_EVENT="delete"
+        ;;
+    "")
+        IONOTIFY_EVENT="modify,delete"
+        ;;
+    *)
+        echo "Unknown event for file: $REQUESTED_EVENT"
+        exit 1
+        ;;
+    esac
+    IONOTIFYWAIT_ARGS+=("-e" "$IONOTIFY_EVENT" "$FILE")
+done
+
+for D in "${DIRS[@]}"; do
+    #possible event in ionotifywait for dir: access, attrib, close_write, close_nowrite, close, create, delete, delete_self, modify, move_self, moved_from, moved_to, move, open, all
+    DIR=$(echo "$D" | cut -d: -f1)
+    REQUESTED_EVENT=$(echo "$D:" | cut -d: -f2)
+    case "$REQUESTED_EVENT" in
+    created)
+        IONOTIFY_EVENT="create"
+        ;;
+    deleted)
+        IONOTIFY_EVENT="delete"
+        ;;
+    updated)
+        IONOTIFY_EVENT="modify"
+        ;;
+    "")
+        IONOTIFY_EVENT="create,delete,modify"
+        ;;
+    *)
+        echo "Unknown event for dir: $REQUESTED_EVENT"
+        exit 1
+        ;;
+    esac
+    IONOTIFYWAIT_ARGS+=("-e" "$IONOTIFY_EVENT" "$DIR")
+done
+
+while true; do
+    echo "###############"
+    for S in "${SCRIPTS[@]}"; do
+        bash -c '$0 "$@"' "$S" "Watcher started" || true
+    done
+    # ionotifywait flags
+    # -m monitor
+    inotifywait -m "${IONOTIFYWAIT_ARGS[@]}"  | while read -r line; do
+        echo "$line"
+        for S in "${SCRIPTS[@]}"; do
+            bash -c '$0 "$@"' "$S" "$line" >/dev/null || true
+        done
+    done
+done
