@@ -1,0 +1,9 @@
+[Unit]
+Description=VHMonitorWeb
+
+[Service]
+ExecStart=vh-watch -d /var/www/html -r "noti web monitor"
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
