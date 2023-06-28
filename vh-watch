@@ -1,5 +1,15 @@
 #!/bin/bash
 
+# parse arguments
+
+# -f file:EVENT (multiple time)
+#  where EVENT can be modified, deleted
+# -d dir:EVENT (multiple time)
+#  where EVENT can be created, deleted, updated
+# -r script (multiple time)
+# run script on each event
+# -h help
+
 HELP_FLAG=0
 FILES=()
 DIRS=()
@@ -137,6 +147,28 @@ for D in "${DIRS[@]}"; do
     IONOTIFYWAIT_ARGS+=("-e" "$IONOTIFY_EVENT" "$DIR")
 done
 
+combine() {
+    $FIRE_TIME=$1
+    # combine lines in $FIRE_TIME from each first line received
+    while IFS= read -r line; do
+        BUFFER="$line"
+        INITIAL_TIME=$(date +%s)
+        while IFS= read -r -t 1 line; do
+            BUFFER="$BUFFER|$line"
+            if [ ${#BUFFER} -gt 2000 ]; then
+                break
+            fi
+            CURRENT_TIME=$(date +%s)
+            if [ $(( $CURRENT_TIME - $INITIAL_TIME )) -gt $FIRE_TIME ]; then
+                break
+            fi
+        done
+        if [ "$BUFFER" != "" ]; then
+            echo "$BUFFER"
+        fi
+    done
+}
+
 while true; do
     echo "###############"
     for S in "${SCRIPTS[@]}"; do
@@ -145,8 +177,8 @@ while true; do
     # ionotifywait flags
     # -r recursive
     # -m monitor
-    inotifywait -r -m "${IONOTIFYWAIT_ARGS[@]}"  | while read -r line; do
-        echo "$line"
+    inotifywait -r -m "${IONOTIFYWAIT_ARGS[@]}" | combine 20 | while read -r line; do
+        line=$(echo "$line" | sed 's/|/\n/g')
         for S in "${SCRIPTS[@]}"; do
             bash -c '$0 "$@"' "$S" "$line" >/dev/null || true
         done
